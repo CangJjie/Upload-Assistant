@@ -3,6 +3,7 @@ import os
 import traceback
 import requests
 import re
+import json
 
 from src.bbcode import BBCODE
 from src.console import console
@@ -12,17 +13,32 @@ class COMMON():
         self.config = config
         pass
 
-    async def edit_torrent(self, meta, tracker, source_flag):
-        if os.path.exists(f"{meta['base_dir']}/tmp/{meta['uuid']}/BASE.torrent"):
-            new_torrent = Torrent.read(f"{meta['base_dir']}/tmp/{meta['uuid']}/BASE.torrent")
+    async def edit_torrent(self, meta, tracker, source_flag, torrent_filename="BASE"):
+        if os.path.exists(f"{meta['base_dir']}/tmp/{meta['uuid']}/{torrent_filename}.torrent"):
+            new_torrent = Torrent.read(f"{meta['base_dir']}/tmp/{meta['uuid']}/{torrent_filename}.torrent")
+            for each in list(new_torrent.metainfo):
+                if each not in ('announce', 'comment', 'creation date', 'created by', 'encoding', 'info'):
+                    new_torrent.metainfo.pop(each, None)
             new_torrent.metainfo['announce'] = self.config['TRACKERS'][tracker].get('announce_url', "https://fake.tracker").strip()
             new_torrent.metainfo['info']['source'] = source_flag
             Torrent.copy(new_torrent).write(f"{meta['base_dir']}/tmp/{meta['uuid']}/[{tracker}]{meta['clean_name']}.torrent", overwrite=True)
 
+    # used to add tracker url, comment and source flag to torrent file
+    async def add_tracker_torrent(self, meta, tracker, source_flag, new_tracker, comment):
+        if os.path.exists(f"{meta['base_dir']}/tmp/{meta['uuid']}/BASE.torrent"):
+            new_torrent = Torrent.read(f"{meta['base_dir']}/tmp/{meta['uuid']}/BASE.torrent")
+            new_torrent.metainfo['announce'] = new_tracker
+            new_torrent.metainfo['comment'] = comment
+            new_torrent.metainfo['info']['source'] = source_flag
+            Torrent.copy(new_torrent).write(f"{meta['base_dir']}/tmp/{meta['uuid']}/[{tracker}]{meta['clean_name']}.torrent", overwrite=True)
     
-    async def unit3d_edit_desc(self, meta, tracker, signature):
-        base = open(f"{meta['base_dir']}/tmp/{meta['uuid']}/DESCRIPTION.txt", 'r').read()
-        with open(f"{meta['base_dir']}/tmp/{meta['uuid']}/[{tracker}]DESCRIPTION.txt", 'w') as descfile:
+    
+    async def unit3d_edit_desc(self, meta, tracker, signature, comparison=False, desc_header=""):
+        base = open(f"{meta['base_dir']}/tmp/{meta['uuid']}/DESCRIPTION.txt", 'r', encoding='utf8').read()
+        with open(f"{meta['base_dir']}/tmp/{meta['uuid']}/[{tracker}]DESCRIPTION.txt", 'w', encoding='utf8') as descfile:
+            if desc_header != "":
+                descfile.write(desc_header)
+            
             bbcode = BBCODE()
             if meta.get('discs', []) != []:
                 discs = meta['discs']
@@ -34,14 +50,20 @@ class COMMON():
                         if each['type'] == "BDMV":
                             descfile.write(f"[spoiler={each.get('name', 'BDINFO')}][code]{each['summary']}[/code][/spoiler]\n")
                             descfile.write("\n")
-                        if each['type'] == "DVD":
+                        elif each['type'] == "DVD":
                             descfile.write(f"{each['name']}:\n")
                             descfile.write(f"[spoiler={os.path.basename(each['vob'])}][code][{each['vob_mi']}[/code][/spoiler] [spoiler={os.path.basename(each['ifo'])}][code][{each['ifo_mi']}[/code][/spoiler]\n")
+                            descfile.write("\n")
+                        elif each['type'] == "HDDVD":
+                            descfile.write(f"{each['name']}:\n")
+                            descfile.write(f"[spoiler={os.path.basename(each['largest_evo'])}][code][{each['evo_mi']}[/code][/spoiler]\n")
                             descfile.write("\n")
             desc = base
             desc = bbcode.convert_pre_to_code(desc)
             desc = bbcode.convert_hide_to_spoiler(desc)
-            desc = bbcode.convert_comparison_to_collapse(desc, 1000)
+            if comparison == False:
+                desc = bbcode.convert_comparison_to_collapse(desc, 1000)
+        
             desc = desc.replace('[img]', '[img=300]')
             descfile.write(desc)
             images = meta['image_list']
@@ -49,9 +71,10 @@ class COMMON():
                 descfile.write("[center]")
                 for each in range(len(images[:int(meta['screens'])])):
                     web_url = images[each]['web_url']
-                    img_url = images[each]['img_url']
-                    descfile.write(f"[url={web_url}][img=350]{img_url}[/img][/url]")
+                    raw_url = images[each]['raw_url']
+                    descfile.write(f"[url={web_url}][img=350]{raw_url}[/img][/url]")
                 descfile.write("[/center]")
+
             if signature != None:
                 descfile.write(signature)
             descfile.close()
@@ -162,7 +185,88 @@ class COMMON():
                     cookies[lineFields[5]] = lineFields[6]
         return cookies
 
+
+
+    async def ptgen(self, meta, ptgen_site="", ptgen_retry=3):
+        ptgen = ""
+        url = 'https://ptgen.zhenzhen.workers.dev'
+        if ptgen_site != '':
+            url = ptgen_site
+        params = {}
+        data={}
+        #get douban url 
+        if int(meta.get('imdb_id', '0')) != 0:
+            data['search'] = f"tt{meta['imdb_id']}"
+            ptgen = requests.get(url, params=data)
+            if ptgen.json()["error"] != None:
+                for retry in range(ptgen_retry):
+                    try:
+                        ptgen = requests.get(url, params=params)
+                        if ptgen.json()["error"] == None:
+                            break
+                    except requests.exceptions.JSONDecodeError:
+                        continue
+            try:
+                params['url'] = ptgen.json()['data'][0]['link'] 
+            except Exception:
+                console.print("[red]Unable to get data from ptgen using IMDb")
+                params['url'] = console.input(f"[red]Please enter [yellow]Douban[/yellow] link: ")
+        else:
+            console.print("[red]No IMDb id was found.")
+            params['url'] = console.input(f"[red]Please enter [yellow]Douban[/yellow] link: ")
+        try:
+            ptgen = requests.get(url, params=params)
+            if ptgen.json()["error"] != None:
+                for retry in range(ptgen_retry):
+                    ptgen = requests.get(url, params=params)
+                    if ptgen.json()["error"] == None:
+                        break
+            ptgen = ptgen.json()
+            meta['ptgen'] = ptgen
+            with open (f"{meta['base_dir']}/tmp/{meta['uuid']}/meta.json", 'w') as f:
+                json.dump(meta, f, indent=4)
+                f.close()
+            ptgen = ptgen['format']
+            if "[/img]" in ptgen:
+                ptgen = ptgen.split("[/img]")[1]
+            ptgen = f"[img]{meta.get('imdb_info', {}).get('cover', meta.get('cover', ''))}[/img]{ptgen}"
+        except Exception:
+            console.print_exception()
+            console.print(ptgen.text)
+            console.print("[bold red]There was an error getting the ptgen \nUploading without ptgen")
+            return ""
+        return ptgen
+
+
+
+    # async def ptgen(self, meta):
+    #     ptgen = ""
+    #     url = "https://api.iyuu.cn/App.Movie.Ptgen"
+    #     params = {}
+    #     if int(meta.get('imdb_id', '0')) != 0:
+    #         params['url'] = f"tt{meta['imdb_id']}"
+    #     else:
+    #         console.print("[red]No IMDb id was found.")
+    #         params['url'] = console.input(f"[red]Please enter [yellow]Douban[/yellow] link: ")
+    #     try:
+    #         ptgen = requests.get(url, params=params)
+    #         ptgen = ptgen.json()
+    #         ptgen = ptgen['data']['format']
+    #         if "[/img]" in ptgen:
+    #             ptgen = ptgen.split("[/img]")[1]
+    #         ptgen = f"[img]{meta.get('imdb_info', {}).get('cover', meta.get('cover', ''))}[/img]{ptgen}"
+    #     except:
+    #         console.print_exception()
+    #         console.print("[bold red]There was an error getting the ptgen")
+    #         console.print(ptgen)
+    #     return ptgen
+
+
+
     async def filter_dupes(self, dupes, meta):
+        if meta['debug']:
+            console.log("[cyan]Pre-filtered dupes")
+            console.log(dupes)
         new_dupes = []
         for each in dupes:
             if meta.get('sd', 0) == 1:
@@ -215,12 +319,13 @@ class COMMON():
                         remove_set.add(a)
 
             search = each.lower().replace('-', '').replace(' ', '').replace('.', '')
-            for x in remove_set:
+            for x in remove_set.copy():
                 if "|" in x:
                     look_for = x.split('|')
                     for y in look_for:
                         if y.lower() in search:
-                            remove_set.remove(x)
+                            if x in remove_set:
+                                remove_set.remove(x)
                             remove_set.add(y)
 
             allow = True

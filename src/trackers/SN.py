@@ -23,6 +23,7 @@ class SN():
         self.upload_url = 'https://swarmazon.club/api/upload.php'
         self.forum_link = 'https://swarmazon.club/php/forum.php?forum_page=2-swarmazon-rules'
         self.search_url = 'https://swarmazon.club/api/search.php'
+        self.banned_groups = [""]
         pass
 
     async def get_type_id(self, type):
@@ -118,7 +119,7 @@ class SN():
                 for each in range(len(images)):
                     web_url = images[each]['web_url']
                     img_url = images[each]['img_url']
-                    desc.write(f"[url={web_url}][img]{img_url}[/img][/url]")
+                    desc.write(f"[url={web_url}][img=720]{img_url}[/img][/url]")
                 desc.write("[/center]")
             desc.write(f"\n[center][url={self.forum_link}]Simplicity, Socializing and Sharing![/url][/center]")
             desc.close()

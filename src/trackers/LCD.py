@@ -4,6 +4,7 @@ import asyncio
 import requests
 import distutils.util
 import os
+import platform
 
 from src.trackers.COMMON import COMMON
 from src.console import console
@@ -22,11 +23,11 @@ class LCD():
         self.config = config
         self.tracker = 'LCD'
         self.source_flag = 'LOCADORA'
-        self.search_url = 'https://locadora.xyz/api/torrents/filter'
-        self.torrent_url = 'https://locadora.xyz/api/torrents/'
-        self.upload_url = 'https://locadora.xyz/api/torrents/upload' 
+        self.search_url = 'https://locadora.cc/api/torrents/filter'
+        self.torrent_url = 'https://locadora.cc/api/torrents/'
+        self.upload_url = 'https://locadora.cc/api/torrents/upload' 
         self.signature = f"\n[center]Criado usando L4G's Upload Assistant[/center]"
-        
+        self.banned_groups = [""]
         pass
     
     async def upload(self, meta):
@@ -90,7 +91,7 @@ class LCD():
             data['season_number'] = meta.get('season_int', '0')
             data['episode_number'] = meta.get('episode_int', '0')
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:53.0) Gecko/20100101 Firefox/53.0'
+            'User-Agent': f'Upload Assistant/2.1 ({platform.system()} {platform.release()})'
         }
         params = {
             'api_token': self.config['TRACKERS'][self.tracker]['api_key'].strip()
@@ -168,14 +169,6 @@ class LCD():
             params['name'] = params['name'] + f" {meta.get('season', '')}{meta.get('episode', '')}"
         if meta.get('edition', "") != "":
             params['name'] = params['name'] + f" {meta['edition']}"
-        if meta.get('disc', '') == 'BDMV':
-            if meta.get('hdr', '').strip() != '':
-                params['name'] = params['name'] + f" {meta['hdr']}"
-            params['name'] = params['name']
-        else:
-            if meta.get('hdr', '').strip() != '':
-                params['name'] = params['name'] + f" {meta['hdr']}"
-            params['name'] = params['name']
         try:
             response = requests.get(url=self.search_url, params=params)
             response = response.json()

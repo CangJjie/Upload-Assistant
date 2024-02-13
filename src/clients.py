@@ -11,6 +11,7 @@ import errno
 import asyncio
 import ssl
 import shutil
+import time
 
 
 from src.console import console 
@@ -28,6 +29,10 @@ class Clients():
 
     async def add_to_client(self, meta, tracker):
         torrent_path = f"{meta['base_dir']}/tmp/{meta['uuid']}/[{tracker}]{meta['clean_name']}.torrent"
+        if meta.get('no_seed', False) == True:
+            console.print(f"[bold red]--no-seed was passed, so the torrent will not be added to the client")
+            console.print(f"[bold yellow]Add torrent manually to the client")
+            return
         if os.path.exists(torrent_path):
             torrent = Torrent.read(torrent_path)
         else:
@@ -43,24 +48,13 @@ class Clients():
         client = self.config['TORRENT_CLIENTS'][default_torrent_client]
         torrent_client = client['torrent_client']
         
-        local_path = list_local_path = self.config['TORRENT_CLIENTS'][default_torrent_client].get('local_path','/LocalPath')
-        remote_path = list_remote_path = self.config['TORRENT_CLIENTS'][default_torrent_client].get('remote_path', '/RemotePath')
-        if isinstance(local_path, list):
-            for i in range(len(local_path)):
-                if os.path.normpath(local_path[i]).lower() in meta['path'].lower():
-                    list_local_path = local_path[i]
-                    list_remote_path = remote_path[i]
-            
-        local_path = os.path.normpath(list_local_path)
-        remote_path = os.path.normpath(list_remote_path)
-        if local_path.endswith(os.sep):
-            remote_path = remote_path + os.sep
+        local_path, remote_path = await self.remote_path_map(meta)
         
         console.print(f"[bold green]Adding to {torrent_client}")
         if torrent_client.lower() == "rtorrent":
             self.rtorrent(meta['path'], torrent_path, torrent, meta, local_path, remote_path, client)
         elif torrent_client == "qbit":
-            await self.qbittorrent(meta['path'], torrent, local_path, remote_path, client, meta['is_disc'], meta['filelist'])
+            await self.qbittorrent(meta['path'], torrent, local_path, remote_path, client, meta['is_disc'], meta['filelist'], meta)
         elif torrent_client.lower() == "deluge":
             if meta['type'] == "DISC":
                 path = os.path.dirname(meta['path'])
@@ -76,86 +70,111 @@ class Clients():
             default_torrent_client = self.config['DEFAULT']['default_torrent_client']
         else:
             default_torrent_client = meta['client']
-        if meta.get('client', None) == 'none':
+        if meta.get('client', None) == 'none' or default_torrent_client == 'none':
             return None
         client = self.config['TORRENT_CLIENTS'][default_torrent_client]
         torrent_storage_dir = client.get('torrent_storage_dir', None)
         torrent_client = client.get('torrent_client', None).lower()
         if torrent_storage_dir == None and torrent_client != "watch":
             console.print(f'[bold red]Missing torrent_storage_dir for {default_torrent_client}')
+            return None
+        elif not os.path.exists(str(torrent_storage_dir)) and torrent_client != "watch":
+            console.print(f"[bold red]Invalid torrent_storage_dir path: [bold yellow]{torrent_storage_dir}")
         torrenthash = None
-        if torrent_storage_dir != None:
+        if torrent_storage_dir != None and os.path.exists(torrent_storage_dir):
             if meta.get('torrenthash', None) != None:
-                torrenthash = meta['torrenthash']
+                valid, torrent_path = await self.is_valid_torrent(meta, f"{torrent_storage_dir}/{meta['torrenthash']}.torrent", meta['torrenthash'], torrent_client, print_err=True)
+                if valid:
+                    torrenthash = meta['torrenthash']
             elif meta.get('ext_torrenthash', None) != None:
-                torrenthash = meta['ext_torrenthash']
+                valid, torrent_path = await self.is_valid_torrent(meta, f"{torrent_storage_dir}/{meta['ext_torrenthash']}.torrent", meta['ext_torrenthash'], torrent_client, print_err=True)
+                if valid:
+                    torrenthash = meta['ext_torrenthash']
             if torrent_client == 'qbit' and torrenthash == None and client.get('enable_search') == True:
                 torrenthash = await self.search_qbit_for_torrent(meta, client)
+                if not torrenthash:
+                    console.print("[bold yellow]No Valid .torrent found")
             if not torrenthash:
                 return None
-            if torrent_client in ('qbit', 'deluge'):
-                torrenthash = torrenthash.lower()
-            elif torrent_client == 'rtorrent':
-                torrenthash = torrenthash.upper()
             torrent_path = f"{torrent_storage_dir}/{torrenthash}.torrent"
-            reuse = None
-            wrong_file = False
-            if os.path.exists(torrent_path):
-                # Reuse if disc
-                if meta.get('is_disc', None) != None:
-                    reuse = torrent_path
-                torrent = Torrent.read(torrent_path)
-                # If one file, check for folder
-                if len(torrent.files) == len(meta['filelist']) == 1:
-                    if os.path.basename(torrent.files[0]) == os.path.basename(meta['filelist'][0]):
-                        if str(torrent.files[0]) == os.path.basename(torrent.files[0]):
-                            reuse = torrent_path
-                    else:
-                        wrong_file = True
-                # Check if number of files matches number of videos
-                elif len(torrent.files) == len(meta['filelist']):
-                    torrent_filepath = os.path.commonpath(torrent.files)
-                    actual_filepath = os.path.commonpath(meta['filelist'])
-                    if torrent_filepath in actual_filepath:
-                        reuse = torrent_path
-            else:
-                console.print(f'[bold yellow]NO .torrent WITH INFOHASH {torrenthash} FOUND')
-            if reuse != None:
-                 if os.path.exists(torrent_path):
-                    reuse_torrent = Torrent.read(torrent_path)
-                    if reuse_torrent.pieces >= 5000 and reuse_torrent.piece_size < 8388608:
-                        console.print("[bold yellow]Too many pieces exist in current hash. REHASHING")
-                        reuse = None
-                    elif reuse_torrent.piece_size < 32768:
-                        console.print("[bold yellow]Piece size too small to reuse")
-                        reuse = None
-                    elif wrong_file == True:
-                        console.print("[bold red] Provided .torrent has files that were not expected")
-                        reuse = None
-                    else:
-                        console.print(f'[bold green]REUSING .torrent with infohash: [bold yellow]{torrenthash}')
-            else:
-                console.print('[bold yellow]Unwanted Files/Folders Identified')
-            return reuse
+            valid2, torrent_path = await self.is_valid_torrent(meta, torrent_path, torrenthash, torrent_client, print_err=False)
+            if valid2:
+                return torrent_path
+        
         return None
+
+
+    async def is_valid_torrent(self, meta, torrent_path, torrenthash, torrent_client, print_err=False):
+        valid = False
+        wrong_file = False
+        err_print = ""
+        if torrent_client in ('qbit', 'deluge'):
+            torrenthash = torrenthash.lower().strip()
+            torrent_path = torrent_path.replace(torrenthash.upper(), torrenthash)
+        elif torrent_client == 'rtorrent':
+            torrenthash = torrenthash.upper().strip()
+            torrent_path = torrent_path.replace(torrenthash.upper(), torrenthash)
+        if meta['debug']:
+            console.log(torrent_path)
+        if os.path.exists(torrent_path):
+            torrent = Torrent.read(torrent_path)
+            # Reuse if disc and basename matches
+            if meta.get('is_disc', None) != None:
+                torrent_filepath = os.path.commonpath(torrent.files)
+                if os.path.basename(meta['path']) in torrent_filepath:
+                    valid = True
+            # If one file, check for folder
+            if len(torrent.files) == len(meta['filelist']) == 1:
+                if os.path.basename(torrent.files[0]) == os.path.basename(meta['filelist'][0]):
+                    if str(torrent.files[0]) == os.path.basename(torrent.files[0]):
+                        valid = True
+                else:
+                    wrong_file = True
+            # Check if number of files matches number of videos
+            elif len(torrent.files) == len(meta['filelist']):
+                torrent_filepath = os.path.commonpath(torrent.files)
+                actual_filepath = os.path.commonpath(meta['filelist'])
+                local_path, remote_path = await self.remote_path_map(meta)
+                if local_path.lower() in meta['path'].lower() and local_path.lower() != remote_path.lower():
+                    actual_filepath = torrent_path.replace(local_path, remote_path)
+                    actual_filepath = torrent_path.replace(os.sep, '/')
+                if meta['debug']:
+                    console.log(f"torrent_filepath: {torrent_filepath}")
+                    console.log(f"actual_filepath: {actual_filepath}")
+                if torrent_filepath in actual_filepath:
+                    valid = True
+        else:
+            console.print(f'[bold yellow]{torrent_path} was not found')
+        if valid:
+            if os.path.exists(torrent_path):
+                reuse_torrent = Torrent.read(torrent_path)
+                if (reuse_torrent.pieces >= 7000 and reuse_torrent.piece_size < 8388608) or (reuse_torrent.pieces >= 4000 and reuse_torrent.piece_size < 4194304): # Allow up to 7k pieces at 8MiB or 4k pieces at 4MiB or less
+                    err_print = "[bold yellow]Too many pieces exist in current hash. REHASHING"
+                    valid = False
+                elif reuse_torrent.piece_size < 32768:
+                    err_print = "[bold yellow]Piece size too small to reuse"
+                    valid = False
+                elif wrong_file == True:
+                    err_print = "[bold red] Provided .torrent has files that were not expected"
+                    valid = False
+                else:
+                    err_print = f'[bold green]REUSING .torrent with infohash: [bold yellow]{torrenthash}'
+        else:
+            err_print = '[bold yellow]Unwanted Files/Folders Identified'
+        if print_err:
+            console.print(err_print)
+        return valid, torrent_path
 
 
     async def search_qbit_for_torrent(self, meta, client):
         console.print("[green]Searching qbittorrent for an existing .torrent")
-        local_path = list_local_path = client.get('local_path','/LocalPath')
-        remote_path = list_remote_path = client.get('remote_path', '/RemotePath')
-        if isinstance(local_path, list):
-            for i in range(len(local_path)):
-                if os.path.normpath(local_path[i]).lower() in meta['path'].lower():
-                    list_local_path = local_path[i]
-                    list_remote_path = remote_path[i]
-        local_path = os.path.normpath(list_local_path)
-        remote_path = os.path.normpath(list_remote_path)
-        if local_path.endswith(os.sep):
-            remote_path = remote_path + os.sep
+        torrent_storage_dir = client.get('torrent_storage_dir', None)
+        if torrent_storage_dir == None and client.get("torrent_client", None) != "watch":
+            console.print(f"[bold red]Missing torrent_storage_dir for {self.config['DEFAULT']['default_torrent_client']}")
+            return None
 
         try:
-            qbt_client = qbittorrentapi.Client(host=client['qbit_url'], port=client['qbit_port'], username=client['qbit_user'], password=client['qbit_pass'])
+            qbt_client = qbittorrentapi.Client(host=client['qbit_url'], port=client['qbit_port'], username=client['qbit_user'], password=client['qbit_pass'], VERIFY_WEBUI_CERTIFICATE=client.get('VERIFY_WEBUI_CERTIFICATE', True))
             qbt_client.auth_log_in()
         except qbittorrentapi.LoginFailed:
             console.print("[bold red]INCORRECT QBIT LOGIN CREDENTIALS")
@@ -164,22 +183,36 @@ class Clients():
             console.print("[bold red]APIConnectionError: INCORRECT HOST/PORT")
             return None
 
-        torrents = qbt_client.torrents.info()
+        # Remote path map if needed
+        remote_path_map = False
+        local_path, remote_path = await self.remote_path_map(meta)
         if local_path.lower() in meta['path'].lower() and local_path.lower() != remote_path.lower():
             remote_path_map = True
-        else:
-            remote_path_map = False
+
+        torrents = qbt_client.torrents.info()
         for torrent in torrents:
-            torrent_path = torrent.content_path
+            try:
+                torrent_path = torrent.get('content_path', f"{torrent.save_path}{torrent.name}")
+            except AttributeError:
+                if meta['debug']:
+                    console.print(torrent)
+                    console.print_exception()
+                continue
             if remote_path_map:
-                torrent_path = torrent_path.replace(local_path, remote_path).replace(os.sep, '/')
+                torrent_path = torrent_path.replace(remote_path, local_path)
+                torrent_path = torrent_path.replace(os.sep, '/').replace('/', os.sep)
+
             if meta['is_disc'] in ("", None) and len(meta['filelist']) == 1:
                 if torrent_path == meta['filelist'][0] and len(torrent.files) == len(meta['filelist']):
+                    valid, torrent_path = await self.is_valid_torrent(meta, f"{torrent_storage_dir}/{torrent.hash}.torrent", torrent.hash, 'qbit', print_err=False)
+                    if valid:
+                        console.print(f"[green]Found a matching .torrent with hash: [bold yellow]{torrent.hash}")
+                        return torrent.hash
+            elif meta['path'] == torrent_path:
+                valid, torrent_path = await self.is_valid_torrent(meta, f"{torrent_storage_dir}/{torrent.hash}.torrent", torrent.hash, 'qbit', print_err=False)
+                if valid:
                     console.print(f"[green]Found a matching .torrent with hash: [bold yellow]{torrent.hash}")
                     return torrent.hash
-            elif meta['path'] == torrent_path:
-                console.print(f"[green]Found a matching .torrent with hash: [bold yellow]{torrent.hash}")
-                return torrent.hash
         return None
 
 
@@ -228,7 +261,13 @@ class Clients():
         
         console.print("[bold yellow]Adding and starting torrent")
         rtorrent.load.start_verbose('', fr_file, f"d.directory_base.set={path}")
-        
+        time.sleep(1)
+        # Add labels
+        if client.get('rtorrent_label', None) != None:
+            rtorrent.d.custom1.set(torrent.infohash, client['rtorrent_label'])
+        if meta.get('rtorrent_label') != None:
+            rtorrent.d.custom1.set(torrent.infohash, meta['rtorrent_label'])
+
         # Delete modified fr_file location
         if modified_fr:
             os.remove(f"{path_dir}/fr.torrent")
@@ -237,7 +276,7 @@ class Clients():
         return
 
 
-    async def qbittorrent(self, path, torrent, local_path, remote_path, client, is_disc, filelist):
+    async def qbittorrent(self, path, torrent, local_path, remote_path, client, is_disc, filelist, meta):
         # infohash = torrent.infohash
         #Remote path mount
         isdir = os.path.isdir(path)
@@ -250,18 +289,38 @@ class Clients():
             path = path.replace(os.sep, '/')
         if not path.endswith(os.sep):
             path = f"{path}/"
-        qbt_client = qbittorrentapi.Client(host=client['qbit_url'], port=client['qbit_port'], username=client['qbit_user'], password=client['qbit_pass'])
+        qbt_client = qbittorrentapi.Client(host=client['qbit_url'], port=client['qbit_port'], username=client['qbit_user'], password=client['qbit_pass'], VERIFY_WEBUI_CERTIFICATE=client.get('VERIFY_WEBUI_CERTIFICATE', True))
         console.print("[bold yellow]Adding and rechecking torrent")
         try:
             qbt_client.auth_log_in()
         except qbittorrentapi.LoginFailed:
             console.print("[bold red]INCORRECT QBIT LOGIN CREDENTIALS")
             return
-        qbt_client.torrents_add(torrent_files=torrent.dump(), save_path=path, use_auto_torrent_management=False, is_skip_checking=True, content_layout='Original')
+        auto_management = False
+        am_config = client.get('automatic_management_paths', '')
+        if isinstance(am_config, list):
+            for each in am_config:
+                if os.path.normpath(each).lower() in os.path.normpath(path).lower(): 
+                    auto_management = True
+        else:
+            if os.path.normpath(am_config).lower() in os.path.normpath(path).lower() and am_config.strip() != "": 
+                auto_management = True
+        qbt_category = client.get("qbit_cat") if not meta.get("qbit_cat") else meta.get('qbit_cat')
+
+        content_layout = client.get('content_layout', 'Original')
+        
+        qbt_client.torrents_add(torrent_files=torrent.dump(), save_path=path, use_auto_torrent_management=auto_management, is_skip_checking=True, content_layout=content_layout, category=qbt_category)
+        # Wait for up to 30 seconds for qbit to actually return the download
+        # there's an async race conditiion within qbt that it will return ok before the torrent is actually added
+        for _ in range(0, 30):
+            if len(qbt_client.torrents_info(torrent_hashes=torrent.infohash)) > 0:
+                break
+            await asyncio.sleep(1)
         qbt_client.torrents_resume(torrent.infohash)
         if client.get('qbit_tag', None) != None:
             qbt_client.torrents_add_tags(tags=client.get('qbit_tag'), torrent_hashes=torrent.infohash)
-        
+        if meta.get('qbit_tag') != None:
+            qbt_client.torrents_add_tags(tags=meta.get('qbit_tag'), torrent_hashes=torrent.infohash)
         console.print(f"Added to: {path}")
         
 
@@ -332,3 +391,24 @@ class Clients():
             offset += fileinfo["length"]
 
         return metainfo
+
+
+    async def remote_path_map(self, meta):
+        if meta.get('client', None) == None:
+            torrent_client = self.config['DEFAULT']['default_torrent_client']
+        else:
+            torrent_client = meta['client']
+        local_path = list_local_path = self.config['TORRENT_CLIENTS'][torrent_client].get('local_path','/LocalPath')
+        remote_path = list_remote_path = self.config['TORRENT_CLIENTS'][torrent_client].get('remote_path', '/RemotePath')
+        if isinstance(local_path, list):
+            for i in range(len(local_path)):
+                if os.path.normpath(local_path[i]).lower() in meta['path'].lower():
+                    list_local_path = local_path[i]
+                    list_remote_path = remote_path[i]
+            
+        local_path = os.path.normpath(list_local_path)
+        remote_path = os.path.normpath(list_remote_path)
+        if local_path.endswith(os.sep):
+            remote_path = remote_path + os.sep
+
+        return local_path, remote_path

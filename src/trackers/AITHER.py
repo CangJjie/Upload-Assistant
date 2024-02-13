@@ -6,6 +6,7 @@ from difflib import SequenceMatcher
 import distutils.util
 import json
 import os
+import platform
 
 from src.trackers.COMMON import COMMON
 from src.console import console
@@ -25,12 +26,13 @@ class AITHER():
         self.search_url = 'https://aither.cc/api/torrents/filter'
         self.upload_url = 'https://aither.cc/api/torrents/upload'
         self.signature = f"\n[center][url=https://aither.cc/forums/topics/1349]Created by L4G's Upload Assistant[/url][/center]"
+        self.banned_groups = ['4K4U', 'AROMA', 'EMBER', 'FGT', 'Hi10', 'ION10', 'Judas', 'LAMA', 'MeGusta', 'QxR', 'RARBG', 'SPDVD', 'STUTTERSHIT', 'SWTYBLZ', 'Sicario', 'TAoE', 'TGx', 'TSP', 'TSPxL', 'Tigole', 'Weasley[HONE]', 'Will1869', 'YIFY', 'd3g', 'nikt0', 'x0r']
         pass
     
     async def upload(self, meta):
         common = COMMON(config=self.config)
         await common.edit_torrent(meta, self.tracker, self.source_flag)
-        await common.unit3d_edit_desc(meta, self.tracker, self.signature)
+        await common.unit3d_edit_desc(meta, self.tracker, self.signature, comparison=True)
         cat_id = await self.get_cat_id(meta['category'])
         type_id = await self.get_type_id(meta['type'])
         resolution_id = await self.get_res_id(meta['resolution'])
@@ -73,7 +75,7 @@ class AITHER():
             'sticky' : 0,
         }
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:53.0) Gecko/20100101 Firefox/53.0'
+            'User-Agent': f'Upload Assistant/2.1 ({platform.system()} {platform.release()})'
         }
         params = {
             'api_token': self.config['TRACKERS'][self.tracker]['api_key'].strip()
@@ -110,12 +112,12 @@ class AITHER():
             
             for track in mi['media']['track']:
                 if track['@type'] == "Audio":
-                    if track.get('Language', 'None') == 'en':
+                    if track.get('Language', 'None').startswith('en'):
                         has_eng_audio = True
             if not has_eng_audio:
                 audio_lang = mi['media']['track'][2].get('Language_String', "").upper()
                 if audio_lang != "":
-                    aither_name = aither_name.replace(meta['resolution'], f"{audio_lang} {meta['resolution']}")
+                    aither_name = aither_name.replace(meta['resolution'], f"{audio_lang} {meta['resolution']}", 1)
         else:
             for audio in meta['bdinfo']['audio']:
                 if audio['language'] == 'English':
@@ -123,8 +125,9 @@ class AITHER():
             if not has_eng_audio:
                 audio_lang = meta['bdinfo']['audio'][0]['language'].upper()
                 if audio_lang != "":
-                    aither_name = aither_name.replace(meta['resolution'], f"{audio_lang} {meta['resolution']}")
-        # aither_name = aither_name.replace(meta.get('video_encode', meta.get('video_codec', "")), meta.get('video_encode', meta.get('video_codec', "")).replace('.', ''))
+                    aither_name = aither_name.replace(meta['resolution'], f"{audio_lang} {meta['resolution']}", 1)
+        if meta['category'] == "TV" and meta.get('tv_pack', 0) == 0 and meta.get('episode_title_storage', '').strip() != '' and meta['episode'].strip() != '':
+            aither_name = aither_name.replace(meta['episode'], f"{meta['episode']} {meta['episode_title_storage']}", 1)
         return aither_name
 
     async def get_cat_id(self, category_name):
@@ -180,14 +183,7 @@ class AITHER():
             params['name'] = params['name'] + f" {meta.get('season', '')}{meta.get('episode', '')}"
         if meta.get('edition', "") != "":
             params['name'] = params['name'] + f" {meta['edition']}"
-        if meta.get('disc', '') == 'BDMV':
-            if meta.get('hdr', '').strip() != '':
-                params['name'] = params['name'] + f" {meta['hdr']}"
-            params['name'] = params['name'] + meta['audio']
-        else:
-            if meta.get('hdr', '').strip() != '':
-                params['name'] = params['name'] + f" {meta['hdr']}"
-            params['name'] = params['name'] + meta['audio']
+        
         try:
             response = requests.get(url=self.search_url, params=params)
             response = response.json()

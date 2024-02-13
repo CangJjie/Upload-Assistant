@@ -1,6 +1,6 @@
 # L4G's Upload Assistant
 
-A simple tool to take the work out of uploading. Now with a Discord Bot interface for people who don't like command line!
+A simple tool to take the work out of uploading.
 
 ## What It Can Do:
   - Generates and Parses MediaInfo/BDInfo.
@@ -13,7 +13,7 @@ A simple tool to take the work out of uploading. Now with a Discord Bot interfac
   - Can re-use existing torrents instead of hashing new
   - Generates proper name for your upload using Mediainfo/BDInfo and TMDb/IMDb conforming to site rules
   - Checks for existing releases already on site
-  - Uploads to PTP/BLU/BHD/Aither/THR/STC/R4E(limited)/STT/HP/ACM/LCD/LST/TDB
+  - Uploads to PTP/BLU/BHD/Aither/THR/STC/R4E(limited)/STT/HP/ACM/LCD/LST/NBL/ANT/FL/HUNO/RF/SN
   - Adds to your client with fast resume, seeding instantly (rtorrent/qbittorrent/deluge/watch folder)
   - ALL WITH MINIMAL INPUT!
   - Currently works with .mkv/.mp4/Blu-ray/DVD/HD-DVDs
@@ -37,7 +37,6 @@ A simple tool to take the work out of uploading. Now with a Discord Bot interfac
    - Edit `config.py` to use your information (more detailed information in the [wiki](https://github.com/L4GSP1KE/Upload-Assistant/wiki))
       - tmdb_api (v3) key can be obtained from https://developers.themoviedb.org/3/getting-started/introduction
       - image host api keys can be obtained from their respective sites
-      - discord bot token can be obtained from https://discord.com/developers/
    - Install necessary python modules `pip3 install --user -U -r requirements.txt`
      
    
@@ -49,9 +48,11 @@ A simple tool to take the work out of uploading. Now with a Discord Bot interfac
 ## **Updating:**
   - To update first navigate into the Upload-Assistant directory: `cd Upload-Assistant`
   - Run a `git pull` to grab latest updates
-  - Run `pip3 install --user -U -r requirements.txt` to ensure dependencies are up to date
-  ## **CLI Usage:**
+  - Run `python3 -m pip install --user -U -r requirements.txt` to ensure dependencies are up to date
+## **CLI Usage:**
   
   `python3 upload.py /downloads/path/to/content --args`
   
   Args are OPTIONAL, for a list of acceptable args, pass `--help`
+## **Docker Usage:**
+  Visit our wonderful [docker usage wiki page](https://github.com/L4GSP1KE/Upload-Assistant/wiki/Docker)

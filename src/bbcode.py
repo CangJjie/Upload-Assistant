@@ -65,6 +65,7 @@ class BBCODE:
             desc = re.sub("\[mediainfo\][\s\S]*?\[\/mediainfo\]", "", desc)
         elif is_disc != "BDMV":
             desc = re.sub("(^general\nunique)(.*?)^$", "", desc, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
+            desc = re.sub("(^general\ncomplete)(.*?)^$", "", desc, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
             desc = re.sub("(^(Format[\s]{2,}:))(.*?)^$", "", desc, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
             desc = re.sub("(^(video|audio|text)( #\d+)?\nid)(.*?)^$", "", desc, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
             desc = re.sub("(^(menu)( #\d+)?\n)(.*?)^$", "", f"{desc}\n\n", flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
@@ -113,7 +114,7 @@ class BBCODE:
         # Replace comparison/hide tags with placeholder because sometimes uploaders use comp images as loose images
         for i in range(len(comps)):
             nocomp = nocomp.replace(comps[i], '')
-            desc = desc.replace(comps[i], f"COMPARISON_PLACEHOLDER-{i}")
+            desc = desc.replace(comps[i], f"COMPARISON_PLACEHOLDER-{i} ")
             comp_placeholders.append(comps[i])
 
 
@@ -129,17 +130,17 @@ class BBCODE:
         if comp_placeholders != []:
             for i, comp in enumerate(comp_placeholders):
                 comp = re.sub("\[\/?img[\s\S]*?\]", "",comp, flags=re.IGNORECASE)
-                desc = desc.replace(f"COMPARISON_PLACEHOLDER-{i}", comp)
+                desc = desc.replace(f"COMPARISON_PLACEHOLDER-{i} ", comp)
 
         # Convert hides with multiple images to comparison
         desc = self.convert_collapse_to_comparison(desc, "hide", hides)
 
         # Strip blank lines:
-        desc = desc.rstrip()
+        desc = desc.strip('\n')
         desc = re.sub("\n\n+", "\n\n", desc)
         while desc.startswith('\n'):
             desc = desc.replace('\n', '', 1)
-        desc = desc.rstrip()
+        desc = desc.strip('\n')
 
         if desc.replace('\n', '') == '':
             return ""
@@ -172,7 +173,7 @@ class BBCODE:
         spoiler_placeholders = []
         for i in range(len(spoilers)):
             nospoil = nospoil.replace(spoilers[i], '')
-            desc = desc.replace(spoilers[i], f"SPOILER_PLACEHOLDER-{i}")
+            desc = desc.replace(spoilers[i], f"SPOILER_PLACEHOLDER-{i} ")
             spoiler_placeholders.append(spoilers[i])
         
         # Get Images from outside spoilers
@@ -197,7 +198,7 @@ class BBCODE:
         # Replace spoiler tags
         if spoiler_placeholders != []:
             for i, spoiler in enumerate(spoiler_placeholders):
-                desc = desc.replace(f"SPOILER_PLACEHOLDER-{i}", spoiler)
+                desc = desc.replace(f"SPOILER_PLACEHOLDER-{i} ", spoiler)
 
         # Check for empty [center] tags
         centers = re.findall("\[center[\s\S]*?\[\/center\]", desc)
@@ -214,15 +215,14 @@ class BBCODE:
         desc = self.convert_collapse_to_comparison(desc, "spoiler", spoilers)
                 
         # Strip blank lines:
-        desc = desc.rstrip()
+        desc = desc.strip('\n')
         desc = re.sub("\n\n+", "\n\n", desc)
         while desc.startswith('\n'):
             desc = desc.replace('\n', '', 1)
-        desc = desc.rstrip()
+        desc = desc.strip('\n')
 
         if desc.replace('\n', '') == '':
             return "", imagelist
-        
         return desc, imagelist
 
 

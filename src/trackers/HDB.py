@@ -23,6 +23,7 @@ class HDB():
         self.passkey = config['TRACKERS']['HDB'].get('passkey', '').strip()
         self.rehost_images = config['TRACKERS']['HDB'].get('img_rehost', False)
         self.signature = None
+        self.banned_groups = [""]
     
 
     async def get_type_category_id(self, meta):
@@ -116,7 +117,9 @@ class HDB():
             "CRKL" : 73,
             "FUNI" : 74,
             "HLMK" : 71,
-            "HTSR" : 79
+            "HTSR" : 79,
+            "CRAV" : 80,
+            'MAX' : 88
         }
         if meta.get('service') in service_dict.keys():
             tags.append(service_dict.get(meta['service']))
@@ -169,20 +172,28 @@ class HDB():
         hdb_name = meta['name']
         hdb_name = hdb_name.replace('H.265', 'HEVC')
         if meta.get('source', '').upper() == 'WEB' and meta.get('service', '').strip() != '':
-            hdb_name = hdb_name.replace(f"{meta.get('service', '')} ", '')
+            hdb_name = hdb_name.replace(f"{meta.get('service', '')} ", '', 1)
         if 'DV' in meta.get('hdr', ''):
             hdb_name = hdb_name.replace(' DV ', ' DoVi ')
+        if 'HDR' in meta.get('hdr', ''):
+            if 'HDR10+' not in meta['hdr']:
+                hdb_name = hdb_name.replace('HDR', 'HDR10')
         if meta.get('type') in ('WEBDL', 'WEBRIP', 'ENCODE'):
-            hdb_name = hdb_name.replace(meta['audio'], meta['audio'].replace(' ', '', 1))
+            hdb_name = hdb_name.replace(meta['audio'], meta['audio'].replace(' ', '', 1).replace('Atmos', ''))
+        else:
+            hdb_name = hdb_name.replace(meta['audio'], meta['audio'].replace('Atmos', ''))
         hdb_name = hdb_name.replace(meta.get('aka', ''), '')
         if meta.get('imdb_info'):
             hdb_name = hdb_name.replace(meta['title'], meta['imdb_info']['aka'])
-            if meta['year'] != meta.get('imdb_info', {}).get('year', meta['year']):
+            if str(meta['year']) != str(meta.get('imdb_info', {}).get('year', meta['year'])) and str(meta['year']).strip() != '':
                 hdb_name = hdb_name.replace(str(meta['year']), str(meta['imdb_info']['year']))
         # Remove Dubbed/Dual-Audio from title
         hdb_name = hdb_name.replace('PQ10', 'HDR')
         hdb_name = hdb_name.replace('Dubbed', '').replace('Dual-Audio', '')
+        hdb_name = hdb_name.replace('REMUX', 'Remux')
         hdb_name = ' '.join(hdb_name.split())
+        hdb_name = re.sub("[^0-9a-zA-ZÀ-ÿ. :&+'\-\[\]]+", "", hdb_name)
+        hdb_name = hdb_name.replace(' .', '.').replace('..', '.')
 
         return hdb_name 
 
@@ -404,7 +415,7 @@ class HDB():
                     descfile.write(f"[quote=VOB MediaInfo]{discs[0]['vob_mi']}[/quote]\n")
                     descfile.write("\n")
                 if discs[0]['type'] == "BDMV":
-                    descfile.write(f"[quote]{discs[0]['summary'].rstrip()}[/quote]\n")
+                    descfile.write(f"[quote]{discs[0]['summary'].strip()}[/quote]\n")
                     descfile.write("\n")
                 if len(discs) >= 2:
                     for each in discs[1:]:
@@ -420,8 +431,7 @@ class HDB():
             desc = bbcode.convert_code_to_quote(desc)
             desc = bbcode.convert_spoiler_to_hide(desc)
             desc = bbcode.convert_comparison_to_centered(desc, 1000)
-            desc = desc.replace('[img]', '[imgw]').replace('[/img]', '[/imgw]')
-            desc = re.sub("(\[img=\d+)]", "[imgw]", desc, flags=re.IGNORECASE)
+            desc = re.sub("(\[img=\d+)]", "[img]", desc, flags=re.IGNORECASE)
             descfile.write(desc)
             if self.rehost_images == True:
                 console.print("[green]Rehosting Images...")
@@ -433,7 +443,8 @@ class HDB():
                     descfile.write("[center]")
                     for each in range(len(images[:int(meta['screens'])])):
                         img_url = images[each]['img_url']
-                        descfile.write(f"[imgw={img_url}]")
+                        web_url = images[each]['web_url']
+                        descfile.write(f"[url={web_url}][img]{img_url}[/img][/url]")
                     descfile.write("[/center]")
             if self.signature != None:
                 descfile.write(self.signature)
@@ -451,8 +462,70 @@ class HDB():
             'thumbsize' : 'w300'
         }
         files = {}
-        for i in range(len(images)):
+
+        # Set maximum screenshots to 3 for tv singles and 6 for everthing else
+        hdbimg_screen_count = 3 if meta['category'] == "TV" and meta.get('tv_pack', 0) == 0 else 6 
+        if len(images) < hdbimg_screen_count:
+            hdbimg_screen_count = len(images) 
+        for i in range(hdbimg_screen_count):
             files[f'images_files[{i}]'] = open(images[i], 'rb')
         r = requests.post(url=url, data=data, files=files)
         image_bbcode = r.text
         return image_bbcode
+
+
+
+    async def get_info_from_torrent_id(self, hdb_id):
+        hdb_imdb = hdb_name = hdb_torrenthash = None
+        url = "https://hdbits.org/api/torrents"
+        data = {
+            "username" : self.username,
+            "passkey" : self.passkey,
+            "id" : hdb_id
+        }
+        response = requests.get(url, json=data)
+        if response.ok:
+            try:
+                response = response.json()
+                if response['data'] != []:
+                    hdb_imdb = response['data'][0].get('imdb', {'id' : None}).get('id')
+                    hdb_tvdb = response['data'][0].get('tvdb', {'id' : None}).get('id')
+                    hdb_name = response['data'][0]['name']
+                    hdb_torrenthash = response['data'][0]['hash']
+
+            except:
+                console.print_exception()
+        else:
+            console.print("Failed to get info from HDB ID. Either the site is down or your credentials are invalid")
+        return hdb_imdb, hdb_tvdb, hdb_name, hdb_torrenthash
+
+    async def search_filename(self, filelist):
+        hdb_imdb = hdb_tvdb = hdb_name = hdb_torrenthash = hdb_id = None
+        url = "https://hdbits.org/api/torrents"
+        data = {
+            "username" : self.username,
+            "passkey" : self.passkey,
+            "limit" : 100,
+            "file_in_torrent" : os.path.basename(filelist[0])
+        }
+        response = requests.get(url, json=data)
+        console.print(f"[green]Searching HDB for: [bold yellow]{os.path.basename(filelist[0])}[/bold yellow]")
+        if response.ok:
+            try:
+                response = response.json()
+                if response['data'] != []:
+                    for each in response['data']:
+                        if each['numfiles'] == len(filelist):
+                            hdb_imdb = each.get('imdb', {'id' : None}).get('id')
+                            hdb_tvdb = each.get('tvdb', {'id' : None}).get('id')
+                            hdb_name = each['name']
+                            hdb_torrenthash = each['hash']
+                            hdb_id = each['id']
+                            console.print(f'[bold green]Matched release with HDB ID: [yellow]{hdb_id}[/yellow][/bold green]')
+                            return hdb_imdb, hdb_tvdb, hdb_name, hdb_torrenthash, hdb_id
+            except:
+                console.print_exception()
+        else:
+            console.print("Failed to get info from HDB ID. Either the site is down or your credentials are invalid")
+        console.print(f'[yellow]Could not find a matching release on HDB')
+        return hdb_imdb, hdb_tvdb, hdb_name, hdb_torrenthash, hdb_id

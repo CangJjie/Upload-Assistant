@@ -5,6 +5,7 @@ import sys
 import asyncio
 from glob import glob
 from pymediainfo import MediaInfo
+from collections import OrderedDict
 import json
 
 from src.console import console
@@ -13,8 +14,6 @@ from src.console import console
 class DiscParse():
     def __init__(self):
         pass
-
-
 
     """
     Get and parse bdinfo
@@ -61,9 +60,16 @@ class DiscParse():
                             text = f.read()
                             result = text.split("QUICK SUMMARY:", 2)
                             files = result[0].split("FILES:", 2)[1].split("CHAPTERS:", 2)[0].split("-------------")
-                            result2 = result[1].rstrip("\n")
+                            result2 = result[1].rstrip(" \n")
                             result = result2.split("********************", 1)
-                            bd_summary = result[0].rstrip("\n")
+                            bd_summary = result[0].rstrip(" \n")
+                            f.close()
+                        with open(bdinfo_text, 'r') as f: # parse extended BDInfo
+                            text = f.read()
+                            result = text.split("[code]", 3)
+                            result2 = result[2].rstrip(" \n")
+                            result = result2.split("FILES:", 1)
+                            ext_bd_summary = result[0].rstrip(" \n")
                             f.close()
                         try:
                             shutil.copyfile(bdinfo_text, f"{save_dir}/BD_FULL_{str(i).zfill(2)}.txt")
@@ -76,13 +82,16 @@ class DiscParse():
                         continue
                     break
                 with open(f"{save_dir}/BD_SUMMARY_{str(i).zfill(2)}.txt", 'w') as f:
-                    f.write(bd_summary.rstrip().strip())
+                    f.write(bd_summary.strip())
+                    f.close()
+                with open(f"{save_dir}/BD_SUMMARY_EXT.txt", 'w') as f: # write extended BDInfo file
+                    f.write(ext_bd_summary.strip())
                     f.close()
                 
                 bdinfo = self.parse_bdinfo(bd_summary, files[1], path)
         
-                discs[i]['summary'] = bd_summary.rstrip().strip()
-                discs[i]['bdinfo'] = bdinfo.rstrip().strip()
+                discs[i]['summary'] = bd_summary.strip()
+                discs[i]['bdinfo'] = bdinfo
                 # shutil.rmtree(f"{base_dir}/tmp")
             else:
                 discs = meta_discs
@@ -156,13 +165,17 @@ class DiscParse():
                     fuckatmos = split2[2].strip()
                 else:
                     fuckatmos = ""
+                try:
+                    bit_depth = split2[n+5].strip()
+                except:
+                    bit_depth = ""
                 bdinfo['audio'].append({
                     'language' : split2[0].strip(), 
                     'codec' : split2[1].strip(), 
                     'channels' : split2[n+2].strip(), 
                     'sample_rate' : split2[n+3].strip(), 
                     'bitrate' : split2[n+4].strip(), 
-                    'bit_depth' : split2[n+5].strip(),
+                    'bit_depth' : bit_depth, # Also DialNorm, but is not in use anywhere yet
                     'atmos_why_you_be_like_this': fuckatmos,
                     })
             elif line.startswith("disc title:"):
@@ -204,29 +217,28 @@ class DiscParse():
             os.chdir(path)
             files = glob(f"VTS_*.VOB")
             files.sort()
-            filesdict = [[]]
+            # Switch to ordered dictionary
+            filesdict = OrderedDict()
             main_set = []
-            for i in range(len(files)):
-                trimmed = files[i][4:]
-                set = int(trimmed[:2]) - 1
-                try:
-                    filesdict[set].append(trimmed)
-                except:
-                    filesdict.append([])
-                    filesdict[set].append(trimmed)
-            for vob_set in filesdict:
-                if len(vob_set) > len(main_set):
+            # Use ordered dictionary in place of list of lists
+            for file in files:
+                trimmed = file[4:]
+                if trimmed[:2] not in filesdict:
+                    filesdict[trimmed[:2]] = []
+                filesdict[trimmed[:2]].append(trimmed)
+            main_set_duration = 0
+            for vob_set in filesdict.values():
+                # Parse media info for this VOB set
+                vob_set_mi = MediaInfo.parse(f"VTS_{vob_set[0][:2]}_0.IFO", output='JSON')
+                vob_set_mi = json.loads(vob_set_mi)
+                vob_set_duration = vob_set_mi['media']['track'][1]['Duration']
+                      
+                
+                # If the duration of the new vob set > main set by more than 10% then it's our new main set
+                # This should make it so TV shows pick the first episode 
+                if (float(vob_set_duration) * 1.00) > (float(main_set_duration) * 1.10) or len(main_set) < 1:
                     main_set = vob_set
-                elif len(vob_set) == len(main_set):
-                    vob_set_mi = MediaInfo.parse(f"VTS_{vob_set[0][:2]}_0.IFO", output='JSON')
-                    vob_set_mi = json.loads(vob_set_mi)
-                    vob_set_duration = vob_set_mi['media']['track'][1]['Duration']
-                    
-                    main_set_mi = MediaInfo.parse(f"VTS_{main_set[0][:2]}_0.IFO", output='JSON')
-                    main_set_mi = json.loads(main_set_mi)
-                    main_set_duration = main_set_mi['media']['track'][1]['Duration']
-                    if vob_set_duration > main_set_duration:
-                        main_set = vob_set
+                    main_set_duration = vob_set_duration
             each['main_set'] = main_set
             set = main_set[0][:2]
             each['vob'] = vob = f"{path}/VTS_{set}_1.VOB"
@@ -257,6 +269,7 @@ class DiscParse():
                 file_size = os.path.getsize(file)
                 if file_size > size:
                     largest = file
+                    size = file_size
             each['evo_mi'] = MediaInfo.parse(os.path.basename(largest), output='STRING', full=False, mediainfo_options={'inform_version' : '1'})
             each['largest_evo'] = os.path.abspath(f"{path}/{largest}")
         return discs
